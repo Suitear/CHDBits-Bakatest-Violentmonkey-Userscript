@@ -20,7 +20,7 @@ This is a Tampermonkey script designed for CHDBits. It leverages multiple LLM AP
 - **🛠️ 题库管理 (DB Management):** 内置可视化 UI，支持检索、分页管理及手动纠错。
 
 ---
-![界面预览](./images/2026-04-08_182945.jpg) ![题库管理](./images/2026-04-08_182612.jpg)
+![界面预览](./images/2026-04-08_182945.jpg)<img src="./images/2026-04-08_182612.jpg" width="50%">
 
 
 ## 🚀 安装指南 (Installation)
