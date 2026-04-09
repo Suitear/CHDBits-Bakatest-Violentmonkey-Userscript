@@ -227,7 +227,7 @@
         p.id = 'chd-panel-v138';
         p.style = "position:fixed;top:170px;left:50px;z-index:9999999;background:#fff;padding:12px;border:3px solid #3498db;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,0.5);width:180px;font-family:sans-serif;";
         p.innerHTML = `
-            <div style="font-size:12px;font-weight:bold;margin-bottom:8px;color:#3498db;text-align:center;">CHD 助手 V138</div>
+            <div style="font-size:12px;font-weight:bold;margin-bottom:8px;color:#3498db;text-align:center;">CHD 签到助手 V138</div>
             <select id="apiTypeSel" style="width:100%;margin-bottom:5px;font-size:11px;"><option value="grok">Grok (轮询模式)</option><option value="kimi">Kimi</option><option value="gpt">GPT</option><option value="gemini">Gemini</option></select>
             <input type="password" id="keyInp" style="width:100%;margin-bottom:8px;font-size:11px;" placeholder="API Key">
             <button id="startBtn" style="width:100%;padding:6px;background:#3498db;color:white;border:none;border-radius:4px;margin-bottom:5px;cursor:pointer;font-size:12px;">🚀 开始自动</button>
