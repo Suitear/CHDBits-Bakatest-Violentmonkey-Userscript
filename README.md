@@ -15,7 +15,7 @@ This is a Tampermonkey script designed for CHDBits. It leverages multiple LLM AP
 
 - **🚀 多引擎支持 (Multi-Engine):** 支持 Grok (轮询模式), Kimi, GPT-4o-mini, Gemini 1.5 Flash。
 - **🛡️ 双重指纹算法 (Advanced Fingerprinting):** 采用 V138 增强型双重哈希算法，彻底杜绝 ID 碰撞，确保题目识别精度。
-- **📚 本地智库 (Local Intelligence):** 100% 优先命中本地题库，大幅节省 API 额度。
+- **📚 本地题库 (Local Intelligence):** 100% 优先命中本地题库，大幅节省 API 额度。
 - **🔄 静默迁移 (Silent Migration):** 自动兼容并迁移旧版本（V55/V89）数据。
 - **🛠️ 题库管理 (DB Management):** 内置可视化 UI，支持检索、分页管理及手动纠错。
 
