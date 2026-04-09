@@ -103,7 +103,7 @@
 
             if (local && local.answer) {
                 log.style.background = "#d4edda";
-                log.innerHTML = `✅ <b>智库命中</b> (算法:${local.source||'Legacy'})<br>结果: <span style="color:green;">${local.answer}</span>`;
+                log.innerHTML = `✅ <b>本地题库命中</b> (算法:${local.source||'Legacy'})<br>结果: <span style="color:green;">${local.answer}</span>`;
                 applyAnswer(local.answer, false);
 
                 // 如果是旧指纹命中的，顺便帮用户存一份新指纹，实现静默迁移
