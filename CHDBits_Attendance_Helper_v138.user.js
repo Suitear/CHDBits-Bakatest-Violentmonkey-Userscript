@@ -16,6 +16,7 @@
 // @connect      api.moonshot.ai
 // @connect      api.openai.com
 // @connect      generativelanguage.googleapis.com
+// @connect      googleapis.com
 // ==/UserScript==
 
 (function() {
@@ -34,7 +35,12 @@
         grok: { name: "Grok", url: "https://api.x.ai/v1/chat/completions", model: "grok-4-1-fast" },
         kimi: { name: "Kimi", url: "https://api.moonshot.ai/v1/chat/completions", model: "moonshot-v1-8k" },
         gpt: { name: "GPT", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini" },
-        gemini: { name: "Gemini", url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent", model: "gemini-1.5-flash-latest" }
+        gemini: {
+            name: "Gemini",
+            // 严格对齐官方 v1beta 路径和模型名
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+            model: "gemini-flash-latest"
+        }
     };
 
 // --- 增强版指纹算法 (V138 专用，彻底解决卡死和碰撞) ---
@@ -145,11 +151,12 @@
         const headers = { "Content-Type": "application/json" };
         if (plat !== 'gemini') headers["Authorization"] = `Bearer ${key}`;
 
+console.log("正在请求的完整URL:", conf.url + (plat === 'gemini' ? `?key=${key}` : ""));
         GM_xmlhttpRequest({
             method: "POST",
             url: conf.url + (plat === 'gemini' ? `?key=${key}` : ""),
             headers: headers,
-            data: JSON.stringify((plat === 'gemini') ? { contents: [{ parts: [{ text: prompt }] }] } : { model: model, messages: [{ role: "system", content: "You are a precise test assistant. Only output option IDs." }, { role: "user", content: prompt }], temperature: 0 }),
+            data: JSON.stringify((plat === 'gemini') ? { contents: [{ parts: [{ text: prompt }] }], generationConfig: {temperature: 0.1, topP: 0.95,maxOutputTokens: 20 }} : { model: model, messages: [ { role: "system", content: "You are a precise test assistant. Only output option IDs." }, { role: "user", content: prompt }], temperature: 0 }),
             timeout: 30000,
             onload: function(res) {
                 if (res.status === 200) {
@@ -291,13 +298,62 @@
         document.getElementById('lastP').onclick = () => { currentPage = total; renderDbModal(); };
 
         if (!filtered.length) { c.innerHTML = `<div style="text-align:center;color:#999;margin-top:50px;">空空如也</div>`; return; }
+       // --- 弹窗修改版：点击答案数字触发 prompt 提示框 ---
+        // 1. 先渲染静态结构
         c.innerHTML = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE).map(i => `
             <div style="border-bottom:1px solid #eee;padding:12px 0;font-size:12px;position:relative;">
                 <b>${i.val.question}</b>
-                <div style="margin:5px 0;padding:5px;background:#fcfcfc;border:1px dashed #ddd;">${i.val.options?i.val.options.map(o=>`<div>[${o.id}] ${o.text}</div>`).join(''):'无选项'}</div>
-                <div style="color:green;font-weight:bold;">答案: ${i.val.answer} <small style="color:#999;font-weight:normal;">(${i.val.source||'Manual'})</small></div>
-                <button onclick="if(confirm('彻底删除这条记录?')){GM_deleteValue('${i.key}');renderDbModal();}" style="position:absolute;right:0;bottom:10px;color:red;border:none;background:none;cursor:pointer;font-size:11px;">[删除]</button>
+                <div style="margin:5px 0;padding:5px;background:#fcfcfc;border:1px dashed #ddd;">
+                    ${i.val.options ? i.val.options.map(o => `<div>[${o.id}] ${o.text}</div>`).join('') : '无选项'}
+                </div>
+                <div style="font-weight:bold;">
+                    答案: <span class="edit-ans-btn" data-key="${i.key}" data-old="${i.val.answer}"
+                        style="color:green; cursor:pointer; text-decoration:underline; padding:2px 5px;">
+                        ${i.val.answer}
+                    </span>
+                    <small style="color:#999;font-weight:normal;">(${i.val.source || 'Manual'})</small>
+                </div>
+                <button onclick="if(confirm('彻底删除这条记录?')){GM_deleteValue('${i.key}');renderDbModal();}"
+                    style="position:absolute;right:0;bottom:10px;color:red;border:none;background:none;cursor:pointer;font-size:11px;">[删除]</button>
             </div>`).join('');
+      // 2. 核心修复：为刚才生成的按钮批量绑定点击事件（解决保存无效问题）, 增加合法性校验逻辑 (仅允许 1, 2, 4, 8, 16, 32 及其组合)
+        c.querySelectorAll('.edit-ans-btn').forEach(btn => {
+            btn.onclick = function() {
+                const key = this.getAttribute('data-key');
+                const oldAns = this.getAttribute('data-old');
+                const newAns = prompt('请输入正确答案 (多选请用逗号隔开):\n合法数字：1, 2, 4, 8, 16, 32', oldAns);
+
+                if (newAns !== null) {
+                    const trimmedAns = newAns.trim();
+                    if (trimmedAns === "") return;
+
+                    // --- 增加判断逻辑 ---
+                    // 将输入按逗号拆分，检查每一个数字是否在合法集合内
+                    const validIds = ["1", "2", "4", "8", "16", "32"];
+                    const inputIds = trimmedAns.split(',').map(s => s.trim());
+
+                    const allValid = inputIds.every(id => validIds.includes(id));
+
+                    if (!allValid) {
+                        alert("⚠️ 输入无效！\n答案只能由 1, 2, 4, 8, 16, 32 组成。");
+                        return; // 拦截，不执行保存
+                    }
+                    // -------------------
+
+                    let itemData = GM_getValue(key);
+                    if (itemData) {
+                        itemData.answer = trimmedAns;
+                        itemData.ts = Date.now();
+                        itemData.source = "Manual-Fixed";
+
+                        GM_setValue(key, itemData);
+
+                        // 界面反馈
+                        setTimeout(() => renderDbModal(), 100);
+                    }
+                }
+            };
+        });
     }
 
 
