@@ -43,25 +43,27 @@
         }
     };
 
-// --- 增强版指纹算法 (V138 专用，彻底解决卡死和碰撞) ---
-    function getNewFingerprint(q, o) {
-        // 1. 更加细腻的清洗逻辑：保留数字和关键符号，只去掉空白字符
-        const optionsStr = o.map(x => x.text).sort().join('|');
-        const clean = (q + "@@" + optionsStr).replace(/\s/g, '');
+// --- 增强版指纹算法 (修复乱序不命中问题) ---
+function getNewFingerprint(q, o) {
+    // 1. 核心修复：对选项进行基于 ID 的强制排序，确保选项顺序变化不影响指纹生成
+    const sortedOptions = [...o].sort((a, b) => parseInt(a.id) - parseInt(b.id));
+    const optionsStr = sortedOptions.map(x => x.text).join('|');
 
-        // 2. 双重哈希算法：大幅增加 ID 长度，碰撞概率降低至近乎零
-        let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
-        for (let i = 0, ch; i < clean.length; i++) {
-            ch = clean.charCodeAt(i);
-            h1 = Math.imul(h1 ^ ch, 2654435761);
-            h2 = Math.imul(h2 ^ ch, 1597334677);
-        }
-        h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-        h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    // 2. 清洗逻辑：保留关键字符，去除多余空白
+    const clean = (q + "@@" + optionsStr).replace(/\s/g, '');
 
-        // 生成更长的十六进制 ID
-        return "V138_" + (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16);
+    // 3. 双重哈希算法 (保持 V138 的高强度)
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0, ch; i < clean.length; i++) {
+        ch = clean.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
     }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+    return "V138_" + (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16);
+}
 
     // --- 旧指纹算法 (保持原样即可，仅用于兼容搜索) ---
     function getOldFingerprint(q, o) {
@@ -194,39 +196,92 @@ console.log("正在请求的完整URL:", conf.url + (plat === 'gemini' ? `?key=$
         sessionStorage.setItem('tried_plats', JSON.stringify(tried));
     }
 
-    function saveToDb(fp, q, o, ans, src) {
-        if (!ans) return;
-        GM_setValue(CACHE_PREFIX + fp, { question: q, options: o, answer: ans, source: src, ts: Date.now() });
-    }
+// --- 2. 增强 saveToDb，按题干(Question)进行强制唯一性覆盖 ---
+function saveToDb(fp, q, o, ans, src) {
+    if (!ans) return;
+    const allKeys = GM_listValues();
+    allKeys.forEach(key => {
+        if (key.startsWith(CACHE_PREFIX) || key.startsWith(OLD_PREFIX)) {
+            try {
+                const data = GM_getValue(key);
+                // 只要题干相同，哪怕指纹不同，也视为旧数据清除
+                if (data && data.question === q) {
+                    GM_deleteValue(key);
+                }
+            } catch(e) {}
+        }
+    });
+    GM_setValue(CACHE_PREFIX + fp, { question: q, options: o, answer: ans, source: src, ts: Date.now() });
+}
 
     function applyAnswer(ans, auto) {
         ans.split(',').forEach(id => { const el = document.querySelector(`input[value="${id.trim()}"]`); if (el) el.checked = true; });
         if (auto) setTimeout(() => document.querySelector('input[name="submit"]')?.click(), 1200);
     }
 
-    function getPageTask() {
-        let q = ""; document.querySelectorAll('td').forEach(td => { if(/请问|级]/.test(td.innerText)) q = td.innerText.trim(); });
-        const opts = []; const inputs = document.querySelectorAll('input[name="choice[]"]');
-        if (!inputs.length) return null;
-        inputs.forEach(r => {
-            let t = r.nextSibling ? r.nextSibling.textContent.trim() : (r.parentElement ? r.parentElement.innerText.trim() : "");
-            opts.push({ id: r.value, text: t });
-        });
-        return { q, opts };
-    }
+function getPageTask() {
+    let q = "";
+    document.querySelectorAll('td').forEach(td => {
+        if(/请问|级]/.test(td.innerText)) q = td.innerText.trim();
+    });
 
-    function setupManualCapture() {
-        const saveAction = () => {
-            const t = getPageTask();
-            const checked = Array.from(document.querySelectorAll('input[name="choice[]"]:checked'));
-            const sel = checked.map(i => i.value).join(',');
-            if (t && sel) {
-                saveToDb(getNewFingerprint(t.q, t.opts), t.q, t.opts, sel, "Manual");
+    const opts = [];
+    const inputs = document.querySelectorAll('input[name="choice[]"]');
+    if (!inputs.length) return null;
+
+    inputs.forEach((r, index) => {
+        let t = "";
+        let curr = r.nextSibling;
+        // 逻辑：一直往后找，直到遇到下一个 input 或者 换行标签 <br> 或者 容器末尾
+        while (curr) {
+            if (curr.nodeName === 'INPUT') break; // 撞到下一个选项了，停止
+            if (curr.nodeType === 3) { // 纯文字节点
+                t += curr.textContent;
+            } else if (curr.nodeType === 1 && !['SCRIPT', 'STYLE'].includes(curr.nodeName)) {
+                // 如果是 span 或 b 标签，拿里面的文字
+                t += curr.innerText;
             }
-        };
-        const subBtn = document.querySelector('input[name="submit"]');
-        if (subBtn) subBtn.addEventListener('mousedown', saveAction);
+            if (curr.nodeName === 'BR') break; // 撞到换行了，通常是一个选项的结束
+            curr = curr.nextSibling;
+        }
+
+        // 终极清洗：如果抓出来的文字包含了后面选项的 ID（如 [8]），强制截断
+        t = t.trim();
+        const nextInput = inputs[index + 1];
+        if (nextInput) {
+            const nextIdBrackets = `[${nextInput.value}]`;
+            if (t.includes(nextIdBrackets)) {
+                t = t.split(nextIdBrackets)[0].trim();
+            }
+        }
+
+        // 清除开头的干扰符
+        t = t.replace(/^[\s,，.、:：\d\[\]]+/, '');
+        opts.push({ id: r.value, text: t || "选项文字提取失败" });
+    });
+    return { q, opts };
+}
+
+// --- 修正手动捕获逻辑 (确保 mousedown 时能触发覆盖) ---
+function setupManualCapture() {
+    const saveAction = () => {
+        const t = getPageTask();
+        const checked = Array.from(document.querySelectorAll('input[name="choice[]"]:checked'));
+        const sel = checked.map(i => i.value).join(',');
+
+        if (t && sel) {
+            // 这里调用更新后的 saveToDb，它会先删旧，再存新
+            const fp = getNewFingerprint(t.q, t.opts);
+            saveToDb(fp, t.q, t.opts, sel, "Manual-Corrected");
+        }
+    };
+
+    const subBtn = document.querySelector('input[name="submit"]');
+    if (subBtn) {
+        // 使用 mouseup 确保在表单提交跳转前完成本地覆盖
+        subBtn.addEventListener('mouseup', saveAction);
     }
+}
 
     function createUI() {
         if (document.getElementById('chd-panel-v138')) return;
@@ -282,24 +337,39 @@ console.log("正在请求的完整URL:", conf.url + (plat === 'gemini' ? `?key=$
         document.getElementById('dbSearch').oninput = (e) => { searchQuery = e.target.value.trim(); currentPage = 1; renderDbModal(); };
     }
 
-    function renderDbModal() {
-        const m = document.getElementById('dbModal'), c = document.getElementById('dbContent'), pI = document.getElementById('pInfo'), tC = document.getElementById('dbTotalCount');
+function renderDbModal() {
+        const m = document.getElementById('dbModal'),
+              c = document.getElementById('dbContent'),
+              pI = document.getElementById('pInfo'),
+              tC = document.getElementById('dbTotalCount');
         m.style.display = 'flex';
-        let allItems = GM_listValues().filter(k => k.startsWith(CACHE_PREFIX) || k.startsWith(OLD_PREFIX)).map(k => ({ key: k, val: GM_getValue(k) })).sort((a,b)=>(b.val.ts||0)-(a.val.ts||0));
+
+        let allItems = GM_listValues()
+            .filter(k => k.startsWith(CACHE_PREFIX) || k.startsWith(OLD_PREFIX))
+            .map(k => ({ key: k, val: GM_getValue(k) }))
+            .sort((a,b) => (b.val.ts || 0) - (a.val.ts || 0));
+
         tC.innerText = `(共 ${allItems.length} 题)`;
         let filtered = allItems;
         if (searchQuery) {
             const q = searchQuery.toLowerCase();
-            filtered = allItems.filter(i => i.val.question.toLowerCase().includes(q) || (i.val.options && i.val.options.some(o => o.text.toLowerCase().includes(q))));
+            filtered = allItems.filter(i =>
+                i.val.question.toLowerCase().includes(q) ||
+                (i.val.options && i.val.options.some(o => o.text.toLowerCase().includes(q)))
+            );
         }
+
         const total = Math.ceil(filtered.length / PAGE_SIZE) || 1;
         if (currentPage > total) currentPage = total;
         pI.innerText = `${currentPage} / ${total}`;
         document.getElementById('lastP').onclick = () => { currentPage = total; renderDbModal(); };
 
-        if (!filtered.length) { c.innerHTML = `<div style="text-align:center;color:#999;margin-top:50px;">空空如也</div>`; return; }
-       // --- 弹窗修改版：点击答案数字触发 prompt 提示框 ---
-        // 1. 先渲染静态结构
+        if (!filtered.length) {
+            c.innerHTML = `<div style="text-align:center;color:#999;margin-top:50px;">空空如也</div>`;
+            return;
+        }
+
+        // 1. 渲染 HTML，给删除按钮加上类名 del-btn 和 data-key
         c.innerHTML = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE).map(i => `
             <div style="border-bottom:1px solid #eee;padding:12px 0;font-size:12px;position:relative;">
                 <b>${i.val.question}</b>
@@ -313,43 +383,57 @@ console.log("正在请求的完整URL:", conf.url + (plat === 'gemini' ? `?key=$
                     </span>
                     <small style="color:#999;font-weight:normal;">(${i.val.source || 'Manual'})</small>
                 </div>
-                <button onclick="if(confirm('彻底删除这条记录?')){GM_deleteValue('${i.key}');renderDbModal();}"
+                <button class="del-btn" data-key="${i.key}"
                     style="position:absolute;right:0;bottom:10px;color:red;border:none;background:none;cursor:pointer;font-size:11px;">[删除]</button>
             </div>`).join('');
-      // 2. 核心修复：为刚才生成的按钮批量绑定点击事件（解决保存无效问题）, 增加合法性校验逻辑 (仅允许 1, 2, 4, 8, 16, 32 及其组合)
+
+// 2. 强力删除绑定：不仅删当前，还连带清理所有同题干的冗余数据
+        c.querySelectorAll('.del-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const key = this.getAttribute('data-key');
+                const data = GM_getValue(key);
+
+                if (confirm('彻底删除这条记录及所有关联重复项吗?')) {
+                    // 获取当前要删的题目文本，用于清理“双胞胎”
+                    const targetQuestion = data ? data.question : null;
+
+                    if (targetQuestion) {
+                        // 遍历所有 Key，把题干相同的全部物理抹除
+                        const allKeys = GM_listValues();
+                        allKeys.forEach(k => {
+                            const item = GM_getValue(k);
+                            if (item && item.question === targetQuestion) {
+                                GM_deleteValue(k);
+                            }
+                        });
+                    }
+
+                    // 补刀：确保当前 key 一定被删掉
+                    GM_deleteValue(key);
+
+                    // 强制延迟刷新，给数据库同步时间
+                    setTimeout(() => {
+                        searchQuery = ""; // 清空搜索，重置计数
+                        renderDbModal();
+                    }, 150);
+                }
+            });
+        });
+
+        // 3. 为修改答案按钮绑定点击事件
         c.querySelectorAll('.edit-ans-btn').forEach(btn => {
             btn.onclick = function() {
                 const key = this.getAttribute('data-key');
                 const oldAns = this.getAttribute('data-old');
-                const newAns = prompt('请输入正确答案 (多选请用逗号隔开):\n合法数字：1, 2, 4, 8, 16, 32', oldAns);
-
-                if (newAns !== null) {
-                    const trimmedAns = newAns.trim();
-                    if (trimmedAns === "") return;
-
-                    // --- 增加判断逻辑 ---
-                    // 将输入按逗号拆分，检查每一个数字是否在合法集合内
-                    const validIds = ["1", "2", "4", "8", "16", "32"];
-                    const inputIds = trimmedAns.split(',').map(s => s.trim());
-
-                    const allValid = inputIds.every(id => validIds.includes(id));
-
-                    if (!allValid) {
-                        alert("⚠️ 输入无效！\n答案只能由 1, 2, 4, 8, 16, 32 组成。");
-                        return; // 拦截，不执行保存
-                    }
-                    // -------------------
-
+                const newAns = prompt('请输入正确答案 (1,2,4,8,16,32):', oldAns);
+                if (newAns !== null && newAns.trim() !== "") {
                     let itemData = GM_getValue(key);
                     if (itemData) {
-                        itemData.answer = trimmedAns;
+                        itemData.answer = newAns.trim();
                         itemData.ts = Date.now();
                         itemData.source = "Manual-Fixed";
-
                         GM_setValue(key, itemData);
-
-                        // 界面反馈
-                        setTimeout(() => renderDbModal(), 100);
+                        renderDbModal();
                     }
                 }
             };
