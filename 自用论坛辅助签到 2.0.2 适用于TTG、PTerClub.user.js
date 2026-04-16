@@ -108,10 +108,39 @@
         }
     }
 
-    // TTG
-    if (matchURL("totheglory.im")) {
-        if ($("#sp_signed")) setTimeout(() => $("#sp_signed a")[0].click(), 100)
-    }
+// --- TTG (totheglory.im) 专用自动签到【静默封包版】 ---
+if (matchURL("totheglory.im")) {
+    checkSignDate("TTG").then(() => {
+        // 1. 获取页面上预埋的秘钥信息（从源码中抓取）
+        // 对应您提供的脚本里的 signed_timestamp 和 signed_token
+        const scriptText = Array.from(document.scripts).map(s => s.textContent).join('');
+        const tsMatch = scriptText.match(/signed_timestamp:\s*"(\d+)"/);
+        const tokenMatch = scriptText.match(/signed_token:\s*"([a-f0-9]+)"/);
+
+        if (tsMatch && tokenMatch) {
+            const timestamp = tsMatch[1];
+            const token = tokenMatch[1];
+
+            console.log("TTG 秘钥获取成功，准备发送静默签到...");
+
+            // 2. 直接发送异步请求，不触发任何页面 Alert
+            $.post("signed.php", {
+                signed_timestamp: timestamp,
+                signed_token: token
+            }, function(data) {
+                console.log("TTG 签到响应:", data);
+                // 只要收到返回信息（无论内容是什么），说明服务器已处理
+                $('#sp_signed').html("<b style=\"color:green;\">已签到</b>");
+                setData("TTG", new Date().toLocaleDateString());
+            });
+        } else {
+            // 如果没抓到秘钥（比如已经签到过了），做个兜底判断
+            if (document.getElementById('sp_signed')?.innerText.includes("已签到")) {
+                setData("TTG", new Date().toLocaleDateString());
+            }
+        }
+    });
+}
 
     // 天使动漫
     if (matchURL("tsdm")) {
